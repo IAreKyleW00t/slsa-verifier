@@ -1,0 +1,357 @@
+name: Installer Action CI
+
+on:
+  schedule:
+    - cron: "0 4 * * *" # Daily run
+  workflow_dispatch:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+    paths:
+      - .github/workflows/e2e.installer.yml
+      - actions/installer/**
+
+jobs:
+  test-typescript:
+    name: TypeScript Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+        with:
+          node-version-file: actions/installer/.node-version
+          cache: npm
+
+      - name: Install Dependencies
+        working-directory: actions/installer
+        run: npm ci
+
+      - name: Test
+        working-directory: actions/installer
+        run: npm run ci-test
+
+  format:
+    name: Check formatting
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+        with:
+          node-version-file: actions/installer/.node-version
+          cache: npm
+
+      - name: Install Dependencies
+        working-directory: actions/installer
+        run: npm ci
+
+      - name: Check Format
+        working-directory: actions/installer
+        run: npm run format:check
+
+  lint:
+    name: Lint codebase
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+        with:
+          node-version-file: actions/installer/.node-version
+          cache: npm
+
+      - name: Install Dependencies
+        working-directory: actions/installer
+        run: npm ci
+
+      - name: Lint
+        working-directory: actions/installer
+        run: npm run lint
+
+  check-dist:
+    name: Check dist/
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+        with:
+          node-version-file: actions/installer/.node-version
+          cache: npm
+
+      - name: Install Dependencies
+        working-directory: actions/installer
+        run: npm ci
+
+      - name: Build dist/ Directory
+        working-directory: actions/installer
+        run: npm run bundle
+
+      - name: Compare Directories
+        id: diff
+        env:
+          DEPENDABOT: ${{ github.actor == 'dependabot[bot]' }}
+        working-directory: actions/installer
+        run: |
+          if [ ! -d dist/ ]; then
+            echo "::error::Expected dist/ directory does not exist"
+            exit 1
+          fi
+
+          git add .
+          git status
+          git diff > diff.patch
+          [ -z "$(cat diff.patch)" ] && DIFF=false || DIFF=true
+          echo "diff=$DIFF" | tee -a "$GITHUB_OUTPUT"
+          if [ "$DIFF" == "true" ]; then
+            echo "::error::Detected uncommitted changes after build"
+            exit 1
+          fi
+
+      - name: Upload diff
+        if: (!cancelled()) && steps.diff.outputs.diff == 'true'
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
+        with:
+          name: diff.patch
+          path: actions/installer/diff.patch
+
+  test-ref-version:
+    name: Test ref version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [v2.6.0]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Setup slsa-verifier
+        id: slsa
+        uses: ./actions/installer
+        env:
+          SLSA_VERIFIER_CI_ACTION_REF: ${{ matrix.version }}
+
+      - name: Test slsa-verifier
+        shell: bash
+        env:
+          MATRIX_VERSION: ${{ matrix.version }}
+          VERSION: ${{ steps.slsa.outputs.version }}
+        run: |
+          if ! which slsa-verifier ; then
+            echo "::error::slsa-verifier not found in PATH"
+            exit 1
+          fi
+
+          if which bootstrap-slsa-verifier ; then
+            echo "::error::bootstrap-slsa-verifier was found in PATH"
+            exit 1
+          fi
+
+          [ "$MATRIX_VERSION" != "latest" ] && VERSION=$MATRIX_VERSION
+          if ! slsa-verifier version | grep "${VERSION/v/}" ; then
+            echo "::error::slsa-verifier $VERSION does not appear to be installed"
+            exit 1
+          fi
+
+  test-version:
+    name: Test version
+    runs-on: ${{ matrix.os }}-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos, ubuntu, windows]
+        version: [latest, v2.5.1, 7e1e47d7d793930ab0082c15c2b971fdb53a3c95]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Setup slsa-verifier
+        id: slsa
+        uses: ./actions/installer
+        with:
+          version: ${{ matrix.version }}
+
+      - name: Test slsa-verifier
+        shell: bash
+        env:
+          MATRIX_VERSION: ${{ matrix.version }}
+          VERSION: ${{ steps.slsa.outputs.version }}
+        run: |
+          if ! which slsa-verifier ; then
+            echo "::error::slsa-verifier not found in PATH"
+            exit 1
+          fi
+
+          if which bootstrap-slsa-verifier ; then
+            echo "::error::bootstrap-slsa-verifier was found in PATH"
+            exit 1
+          fi
+
+          [ "$MATRIX_VERSION" != "latest" ] && VERSION=$MATRIX_VERSION
+          if ! slsa-verifier version | grep "${VERSION/v/}" ; then
+            echo "::error::slsa-verifier $VERSION does not appear to be installed"
+            exit 1
+          fi
+
+  test-bad-version:
+    name: Test bad version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - v0.0.0
+          - v0.0.1
+          - foobar
+          - 7e1e47d
+          - ffffffffffffffffffffffffffffffffffffffff
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Setup slsa-verifier
+        id: slsa
+        uses: ./actions/installer
+        continue-on-error: true
+        with:
+          version: ${{ matrix.version }}
+
+      - name: Test slsa-verifier
+        shell: bash
+        env:
+          FAILURE: ${{ steps.slsa.outcome  == 'failure' }}
+        run: |
+          if which slsa-verifier ; then
+            echo "::error::slsa-verifier was found in PATH"
+            exit 1
+          fi
+
+          if which bootstrap-slsa-verifier ; then
+            echo "::error::bootstrap-slsa-verifier was found in PATH"
+            exit 1
+          fi
+
+          if [ "$FAILURE" != "true" ]; then
+            echo "::error::Expected Action to fail but didn't"
+            exit 1
+          fi
+
+  test-cache:
+    name: Test cache
+    runs-on: ${{ matrix.os }}-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos, ubuntu, windows]
+        cache: [true, false]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Setup slsa-verifier (cache)
+        if: matrix.cache == true
+        uses: ./actions/installer
+        with:
+          version: v2.5.1 # don't match bootstrap
+          cache: ${{ matrix.cache }}
+
+      - name: Setup slsa-verifier
+        id: slsa
+        uses: ./actions/installer
+        with:
+          version: v2.5.1 # don't match bootstrap
+          cache: ${{ matrix.cache }}
+
+      - name: Test slsa-verifier
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.slsa.outputs.cache-hit }}
+          MATRIX_CACHE: ${{ matrix.cache }}
+        run: |
+          if ! which slsa-verifier ; then
+            echo "::error::slsa-verifier not found in PATH"
+            exit 1
+          fi
+
+          if which bootstrap-slsa-verifier ; then
+            echo "::error::bootstrap-slsa-verifier was found in PATH"
+            exit 1
+          fi
+
+          if [ "$MATRIX_CACHE" != "$CACHE_HIT" ]; then
+            echo "::error::Cache hit is not what was expected"
+            exit 1
+          fi
+
+  test-bootstrap-cache:
+    name: Test bootstrap cache
+    runs-on: ${{ matrix.os }}-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos, ubuntu, windows]
+        version: [v2.6.0, v2.5.1]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Setup slsa-verifier
+        id: slsa
+        uses: ./actions/installer
+        with:
+          version: ${{ matrix.version }}
+
+      - name: Test slsa-verifier
+        shell: bash
+        env:
+          MATRIX_VERSION: ${{ matrix.version }}
+          CACHE_HIT: ${{ steps.slsa.outputs.cache-hit }}
+        run: |
+          if ! which slsa-verifier ; then
+            echo "::error::slsa-verifier not found in PATH"
+            exit 1
+          fi
+
+          if which bootstrap-slsa-verifier ; then
+            echo "::error::bootstrap-slsa-verifier was found in PATH"
+            exit 1
+          fi
+
+          if [ "$MATRIX_VERSION" == "v2.6.0" ]; then
+            if [ "$CACHE_HIT" != "true"]; then
+              echo "::error::Cache hit is not what was expected"
+              exit 1
+            fi
+          else
+            if [ "$CACHE_HIT" != "false" ]; then
+              echo "::error::Cache hit is not what was expected"
+              exit 1
+            fi
+          fi
