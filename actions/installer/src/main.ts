@@ -46,7 +46,7 @@ export async function run(): Promise<void> {
       process.env.GITHUB_ACTION_REF ||
       process.env.SLSA_VERIFIER_CI_ACTION_REF
     try {
-      core.debug(`version => ${version}`)
+      core.debug(`version =>  ${version}`)
       if (utils.isSha(version)) {
         version = await utils.getVersionReleaseBySha(version, octokit)
       } else if (utils.validVersion(version)) {
