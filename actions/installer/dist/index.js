@@ -52,7 +52,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.fileHasExpectedSha256Hash = exports.getVerifierVersion = exports.validVersion = void 0;
+exports.fileHasExpectedSha256Hash = exports.getVerifierVersion = exports.validVersion = exports.getBinaryName = exports.getReleaseArtifactName = void 0;
 const core = __importStar(__nccwpck_require__(2186));
 const exec = __importStar(__nccwpck_require__(1514));
 const github = __importStar(__nccwpck_require__(5438));
@@ -63,9 +63,32 @@ const fs = __importStar(__nccwpck_require__(7147));
 const os = __importStar(__nccwpck_require__(2037));
 const path = __importStar(__nccwpck_require__(1017));
 const BOOTSTRAP_VERSION = "v2.5.1-rc.0";
-const BOOTSTRAP_VERIFIER_SHA256 = "ccd1edf540ceb9283688745069c041907e5f4cda9dd07a344e601cafb4d11dd2";
-const BINARY_NAME = "slsa-verifier";
-const PROVENANCE_NAME = "slsa-verifier-linux-amd64.intoto.jsonl";
+const BOOTSTRAP_VERIFIER_SHA256 = {
+    win32: {
+        x64: "fd32c79eb0c004c134e5ee1dda6e88cb37c1f6b7eb04a4c744fb14999a94220f",
+        arm64: "2e6cf234caa14c804176fe1552c80438f541b6527674210fc6d98dffb0dd1fd3",
+    },
+    linux: {
+        x64: "ccd1edf540ceb9283688745069c041907e5f4cda9dd07a344e601cafb4d11dd2",
+        arm64: "6dfa11545f3bbc0a7852b6afb3b493b2f19f5fea72188ca97cdd4f3618520983",
+    },
+    darwin: {
+        x64: "2a8951b00be5ef8104945d05e4a3c64d2096028d2fc8c128eba025f851c0fe78",
+        arm64: "aef9eb87a368c0e346e91cf273ab56644693250cbf3e318423de2fb06879334e",
+    },
+};
+// Generates the Release artifact name based on OS and architecture
+function getReleaseArtifactName() {
+    const platform = process.platform.replace("win32", "windows");
+    const arch = process.arch.replace("x64", "amd64");
+    return `slsa-verifier-${platform}-${arch}${platform === "windows" ? ".exe" : ""}`;
+}
+exports.getReleaseArtifactName = getReleaseArtifactName;
+// Generates the final binary name based on OS
+function getBinaryName() {
+    return `slsa-verifier${process.platform === "win32" ? ".exe" : ""}`;
+}
+exports.getBinaryName = getBinaryName;
 // If true, the input string conforms to slsa-verifier's versioning system.
 function validVersion(version) {
     const re = /(v[0-9]+\.[0-9]+\.[0-9]+)/;
@@ -122,8 +145,8 @@ function run() {
         // Get requested verifier version and validate
         // SLSA_VERIFIER_CI_ACTION_REF is a utility env variable to help us test
         // the Action in CI.
-        const actionRef = process.env.GITHUB_ACTION_REF ||
-            process.env.SLSA_VERIFIER_CI_ACTION_REF ||
+        const actionRef = process.env.SLSA_VERIFIER_CI_ACTION_REF ||
+            process.env.GITHUB_ACTION_REF ||
             "";
         let version;
         try {
@@ -138,10 +161,12 @@ function run() {
         tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "slsa-verifier_"));
         const bootstrapDir = `${tmpDir}/bootstrap`;
         const installDir = `${tmpDir}/${version}`;
+        const artifactName = getReleaseArtifactName();
+        const binaryName = getBinaryName();
         let bootstrapVerifierPath;
         try {
             // Download bootstrap version and validate SHA256 checksum
-            bootstrapVerifierPath = yield tc.downloadTool(`https://github.com/slsa-framework/slsa-verifier/releases/download/${BOOTSTRAP_VERSION}/slsa-verifier-linux-amd64`, `${bootstrapDir}/${BINARY_NAME}`);
+            bootstrapVerifierPath = yield tc.downloadTool(`https://github.com/slsa-framework/slsa-verifier/releases/download/${BOOTSTRAP_VERSION}/${artifactName}`, path.join(bootstrapDir, binaryName));
         }
         catch (error) {
             const errMsg = error instanceof Error ? error.message : String(error);
@@ -149,7 +174,7 @@ function run() {
             cleanup();
             return;
         }
-        if (!fileHasExpectedSha256Hash(bootstrapVerifierPath, BOOTSTRAP_VERIFIER_SHA256)) {
+        if (!fileHasExpectedSha256Hash(bootstrapVerifierPath, BOOTSTRAP_VERIFIER_SHA256[process.platform][process.arch])) {
             core.setFailed(`Unable to verify slsa-verifier checksum. Aborting installation.`);
             cleanup();
             return;
@@ -158,7 +183,7 @@ function run() {
         let downloadedBinaryPath;
         try {
             // Download requested version binary and provenance
-            downloadedBinaryPath = yield tc.downloadTool(`https://github.com/slsa-framework/slsa-verifier/releases/download/${version}/slsa-verifier-linux-amd64`, `${installDir}/${BINARY_NAME}`);
+            downloadedBinaryPath = yield tc.downloadTool(`https://github.com/slsa-framework/slsa-verifier/releases/download/${version}/${artifactName}`, path.join(installDir, binaryName));
         }
         catch (error) {
             const errMsg = error instanceof Error ? error.message : String(error);
@@ -168,7 +193,7 @@ function run() {
         }
         let downloadedProvenancePath;
         try {
-            downloadedProvenancePath = yield tc.downloadTool(`https://github.com/slsa-framework/slsa-verifier/releases/download/${version}/slsa-verifier-linux-amd64.intoto.jsonl`, `${installDir}/${PROVENANCE_NAME}`);
+            downloadedProvenancePath = yield tc.downloadTool(`https://github.com/slsa-framework/slsa-verifier/releases/download/${version}/${artifactName}.intoto.jsonl`, path.join(installDir, `${artifactName}.intoto.jsonl`));
         }
         catch (error) {
             const errMsg = error instanceof Error ? error.message : String(error);
@@ -199,8 +224,8 @@ function run() {
             return;
         }
         // Copy requested version to HOME directory.
-        const finalDir = `${os.homedir()}/.slsa/bin/${version}`;
-        const finalPath = `${finalDir}/${BINARY_NAME}`;
+        const finalDir = path.join(os.homedir(), ".slsa", "bin", version);
+        const finalPath = path.join(finalDir, binaryName);
         fs.mkdirSync(finalDir, { recursive: true });
         fs.copyFileSync(downloadedBinaryPath, finalPath);
         fs.chmodSync(finalPath, 0o100);

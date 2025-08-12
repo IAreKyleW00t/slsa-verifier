@@ -16,4 +16,4 @@ uses: slsa-framework/slsa-verifier/actions/installer@v2.7.1
 
 See https://github.com/slsa-framework/slsa-verifier/releases for the list of available `slsa-verifier` releases. Only versions greater or equal to 2.0.1 are supported.
 
-This action requires using GitHub-provided Linux runners.
+This action supports GitHub-provided Windows, Linux, and macOS runners.
